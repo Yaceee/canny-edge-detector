@@ -18,7 +18,7 @@ const Gy = [
 
 const convOptions = {
     bitDepth: 32,
-    mode: 'periodic'
+    border: 'periodic'
 };
 
 export default function cannyEdgeDetector(image, options) {
@@ -28,7 +28,7 @@ export default function cannyEdgeDetector(image, options) {
         components: 1
     });
 
-    options = Object.assign({}, defaultOptions, options);
+    options = { ...defaultOptions, ...options};
 
     const width = image.width;
     const height = image.height;
@@ -41,10 +41,10 @@ export default function cannyEdgeDetector(image, options) {
 
     const gf = image.gaussianFilter(gfOptions);
 
-    const gradientX = gf.convolution(Gy, convOptions);
-    const gradientY = gf.convolution(Gx, convOptions);
+    const gradientX = gf.convolution(Gx, convOptions);
+    const gradientY = gf.convolution(Gy, convOptions);
 
-    const G = gradientY.hypotenuse(gradientX);
+    const G = gradientX.hypotenuse(gradientY);
 
     const Image = image.constructor;
 
@@ -63,50 +63,66 @@ export default function cannyEdgeDetector(image, options) {
     });
 
     // Non-Maximum supression
-    for (var i = 1; i < width - 1; i++) {
-        for (var j = 1; j < height - 1; j++) {
+    for (let column = 1; column < width - 1; column++) {
+        for (let row = 1; row < height - 1; row++) {
+            const currentGradientX = gradientX.getValueXY(column, row, 0);
+            const currentGradientY = gradientY.getValueXY(column, row, 0);
+            const currentGradient = G.getValueXY(column, row, 0);
 
-            var dir = (Math.round(Math.atan2(gradientY.getValueXY(i, j, 0), gradientX.getValueXY(i, j, 0)) * (5.0 / Math.PI)) + 5) % 5;
+            const angle = Math.atan2(currentGradientY, currentGradientX) * (4 / Math.PI);
+            let dir = ((Math.round(angle) + 4) % 4);
 
-            if (
-                !((dir === 0 && (G.getValueXY(i, j, 0) <= G.getValueXY(i, j - 1, 0) || G.getValueXY(i, j, 0) <= G.getValueXY(i, j + 1, 0)))
-                    || (dir === 1 && (G.getValueXY(i, j, 0) <= G.getValueXY(i - 1, j + 1, 0) || G.getValueXY(i, j, 0) <= G.getValueXY(i + 1, j - 1, 0)))
-                    || (dir === 2 && (G.getValueXY(i, j, 0) <= G.getValueXY(i - 1, j, 0) || G.getValueXY(i, j, 0) <= G.getValueXY(i + 1, j, 0)))
-                    || (dir === 3 && (G.getValueXY(i, j, 0) <= G.getValueXY(i - 1, j - 1, 0) || G.getValueXY(i, j, 0) <= G.getValueXY(i + 1, j + 1, 0))))
-            ) {
-                nms.setValueXY(i, j, 0, G.getValueXY(i, j, 0));
+            let before = 0;
+            let after = 0;
+
+            // horizontal
+            if (dir === 0) {
+                before = G.getValueXY(column - 1, row, 0);
+                after = G.getValueXY(column + 1, row, 0);
+            // upward slope
+            } else if (dir === 1) {
+                before = G.getValueXY(column - 1, row - 1, 0);
+                after = G.getValueXY(column + 1, row + 1, 0);
+            // vertical
+            } else if (dir === 2) {
+                before = G.getValueXY(column, row - 1, 0);
+                after = G.getValueXY(column, row + 1, 0);
+            // downward slope
+            } else if (dir === 3) {
+                before = G.getValueXY(column - 1, row + 1, 0);
+                after = G.getValueXY(column + 1, row - 1, 0);
+            }
+
+            if (currentGradient >= before && currentGradient >= after) {
+                nms.setValueXY(column, row, 0, currentGradient);
             }
         }
     }
 
-    for (i = 0; i < width * height; ++i) {
-        var currentNms = nms.data[i];
-        var currentEdge = 0;
-        if (currentNms > options.highThreshold) {
-            currentEdge++;
+    for (let i = 0; i < width * height; ++i) {
+        const value = nms.data[i];
+        if (value >= options.highThreshold) {
+            edges.data[i] = 2;
             finalImage.data[i] = brightness;
+        } else if (value >= options.lowThreshold) {
+            edges.data[i] = 1;
+        } else {
+            edges.data[i] = 0;
         }
-        if (currentNms > options.lowThreshold) {
-            currentEdge++;
-        }
-
-        edges.data[i] = currentEdge;
     }
 
     // Hysteresis: first pass
-    var currentPixels = [];
-    for (i = 1; i < width - 1; ++i) {
-        for (j = 1; j < height - 1; ++j) {
-            if (edges.getValueXY(i, j, 0) !== 1) {
-                continue;
-            }
+    let currentPixels = [];
+    for (let i = 1; i < width - 1; ++i) {
+        for (let j = 1; j < height - 1; ++j) {
+            if (edges.getValueXY(i, j, 0) !== 1) continue;
 
-            outer: for (var k = i - 1; k < i + 2; ++k) {
-                for (var l = j - 1; l < j + 2; ++l) {
-                    if (edges.getValueXY(k, l, 0) === 2) {
+            for (let k = -1; k <= 1; k++) {
+                for (let l = -1; l <= 1; l++) {
+                    if (edges.getValueXY(i + k, j + l, 0) === 2) {
                         currentPixels.push([i, j]);
                         finalImage.setValueXY(i, j, 0, brightness);
-                        break outer;
+                        break;
                     }
                 }
             }
@@ -115,18 +131,14 @@ export default function cannyEdgeDetector(image, options) {
 
     // Hysteresis: second pass
     while (currentPixels.length > 0) {
-        var newPixels = [];
-        for (i = 0; i < currentPixels.length; ++i) {
-            for (j = -1; j < 2; ++j) {
-                for (k = -1; k < 2; ++k) {
-                    if (j === 0 && k === 0) {
-                        continue;
-                    }
-                    var row = currentPixels[i][0] + j;
-                    var col = currentPixels[i][1] + k;
-                    if (edges.getValueXY(row, col, 0) === 1 && finalImage.getValueXY(row, col, 0) === 0) {
-                        newPixels.push([row, col]);
-                        finalImage.setValueXY(row, col, 0, brightness);
+        const newPixels = [];
+        for (const [x, y] of currentPixels) {
+            for (let dx = -1; dx <= 1; dx++) {
+                for (let dy = -1; dy <= 1; dy++) {
+                    const nx = x + dx; const ny = y + dy;
+                    if (edges.getValueXY(nx, ny, 0) === 1 && finalImage.getValueXY(nx, ny, 0) === 0) {
+                        newPixels.push([nx, ny]);
+                        finalImage.setValueXY(nx, ny, 0, brightness);
                     }
                 }
             }
